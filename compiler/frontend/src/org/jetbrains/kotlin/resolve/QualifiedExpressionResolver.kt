@@ -463,13 +463,37 @@ class QualifiedExpressionResolver(val classifierUsageCheckers: Iterable<Classifi
         return null
     }
 
+    fun resolveQualifiedExpression(expression: KtQualifiedExpression,
+                                   scope: LexicalScope,
+                                   context: BindingContext): Pair<DeclarationDescriptor?, Name?> {
+        val qualifiedExpressions = unrollToLeftMostQualifiedExpression(expression)
+        val path = mapToQualifierParts(qualifiedExpressions)
+        val trace = DelegatingBindingTrace(context, "Temp trace for resolving qualified expression")
+
+        val (result, index) = resolveToPackageOrClassPrefix(
+                path = path,
+                moduleDescriptor = scope.ownerDescriptor.module,
+                trace = trace,
+                shouldBeVisibleFrom = scope.ownerDescriptor,
+                scopeForFirstPart = scope,
+                position = QualifierPosition.EXPRESSION
+        )
+
+        if (result == null) return null to null
+        return when(index) {
+            path.size -> result to null
+            path.size - 1 -> result to path[index].name
+            else -> null to null
+        }
+    }
+
     fun resolveQualifierInExpressionAndUnroll(
             expression: KtQualifiedExpression,
             context: ExpressionTypingContext,
             isValue: (KtSimpleNameExpression) -> Boolean
     ): List<CallExpressionElement> {
         val qualifiedExpressions = unrollToLeftMostQualifiedExpression(expression)
-        val maxPossibleQualifierPrefix = getMaxPossibleQualifierPrefix(qualifiedExpressions)
+        val maxPossibleQualifierPrefix = mapToQualifierParts(qualifiedExpressions.dropLast(1))
 
         val nextIndexAfterPrefix = resolveToPackageOrClassPrefix(
                 path = maxPossibleQualifierPrefix,
@@ -489,7 +513,7 @@ class QualifiedExpressionResolver(val classifierUsageCheckers: Iterable<Classifi
                 .map { CallExpressionElement(it) }
     }
 
-    private fun getMaxPossibleQualifierPrefix(qualifiedExpressions: List<KtQualifiedExpression>) : List<QualifierPart> {
+    private fun mapToQualifierParts(qualifiedExpressions: List<KtQualifiedExpression>): List<QualifierPart> {
         if (qualifiedExpressions.isEmpty()) return emptyList()
 
         val first = qualifiedExpressions.first()
@@ -508,7 +532,7 @@ class QualifiedExpressionResolver(val classifierUsageCheckers: Iterable<Classifi
         val qualifierParts = arrayListOf<QualifierPart>()
         qualifierParts.add(QualifierPart(firstReceiver))
 
-        for (qualifiedExpression in qualifiedExpressions.dropLast(1)) {
+        for (qualifiedExpression in qualifiedExpressions) {
             if (qualifiedExpression !is KtDotQualifiedExpression) break
             val selector = qualifiedExpression.selectorExpression
             if (selector !is KtSimpleNameExpression) break
